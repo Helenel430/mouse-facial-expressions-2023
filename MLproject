@@ -1,0 +1,23 @@
+name: telfer_test
+python_env: python_env.yaml
+
+entry_points:
+  train:
+    parameters:
+      seed: {type: int, default: 42}
+      epochs: {type: int, default: 50}
+      learning_rate: {type: float, default: 0.01}
+      training_data: {type: string, default: "data/processed"}
+    command: "python telfer_test/models/train_model.py 
+      --training_data {training_data}
+      --seed {seed}
+      --epochs {epochs}
+      --learning_rate {learning_rate}"
+
+  hparam_optimize:
+    parameters:
+      seed: {type: int, default: 42}
+      n_trials: {type: int, default: 10}
+    command: "python telfer_test/models/hparam_optimize.py 
+      --seed {seed}
+      --n_trials {n_trials}"

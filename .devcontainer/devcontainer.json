@@ -1,0 +1,8 @@
+{
+    "name": "mouse_facial_expressions_2023",
+    "build": {
+      "dockerfile": "../Dockerfile",
+      "context": ".."
+    },
+    "runArgs": ["--gpus=all", "--shm-size=4g"]
+  }

@@ -1,0 +1,17 @@
+# Python version required to run the project.
+python: "3.10"
+# Dependencies required to build packages. This field is optional.
+build_dependencies:
+  - pip
+  - setuptools
+  - wheel==0.37.1
+# Dependencies required to run the project.
+dependencies:
+  - -e .
+  - mlflow==2.3
+  - scikit-learn==1.0.2
+  - python-dotenv>=0.5.1
+  - torch 
+  - torchvision
+  - torchaudio
+  - optuna
