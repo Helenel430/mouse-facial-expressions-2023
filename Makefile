@@ -7,7 +7,7 @@
 PROJECT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BUCKET = [OPTIONAL] your-bucket-for-syncing-data (do not include 's3://')
 PROFILE = default
-PROJECT_NAME = mouse_facial_expressions_2023
+PROJECT_NAME = mouse_facial_expressions
 PYTHON_INTERPRETER = python3
 
 ifeq (,$(shell which conda))
@@ -44,12 +44,24 @@ clean:
 
 ## Lint using flake8 and black (use `make format` to do formatting)
 lint:
-	flake8 mouse_facial_expressions_2023
-	black --check --config pyproject.toml mouse_facial_expressions_2023
+	flake8 mouse_facial_expressions
+	black --check --config pyproject.toml mouse_facial_expressions
 
 ## Format source code with black
 format:
-	black --config pyproject.toml mouse_facial_expressions_2023
+	black --config pyproject.toml mouse_facial_expressions
+
+## Process the raw videos
+process-raw-videos: requirements
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/raw_video_processing.py rename
+
+
+## Upload dataset
+upload-data:
+	gsutil rsync -c -r $(PROJECT_DIR)/data/ gs://telfer_lps_facial_expressions/data
+
+download-data: 
+	gsutil rsync -c -r gs://telfer_lps_facial_expressions/data $(PROJECT_DIR)/data/ 
 
 ## Build Docker
 build-docker: 
