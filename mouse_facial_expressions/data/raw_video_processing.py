@@ -67,11 +67,11 @@ def preprocess_video(row, input_directory, output_directory):
     recording_labels = dict(
         enumerate(
             [
-                "acclimation",
-                "preinjection",
-                "1h-postinjection",
-                "2h-postinjection",
-                "4h-postinjection",
+                "rec0_acclimation",
+                "rec1_preinjection",
+                "rec2_1h-postinjection",
+                "rec3_2h-postinjection",
+                "rec4_4h-postinjection",
             ]
         )
     )
@@ -133,7 +133,8 @@ def rename(output_folder, mouse):
         output_folder.mkdir(parents=True)
 
     # if specific mice were specified, print them out 
-    if mouse is not None:
+    if len(mouse):
+        logger.info("Individual mice specified")
         rows = []
         for m in mouse:
             try:
@@ -148,6 +149,11 @@ def rename(output_folder, mouse):
 
     # process videos
     for idx, row in meta_df.iterrows():
+        if str(row.discard) == '1':
+            video = find_video_from_details(row, input_video_folder)
+            logger.info(f"Video marked for discard: {video}")
+            continue
+
         cmd = preprocess_video(row, input_video_folder, output_folder)
         if cmd:
             logger.info(f"Processing video with command: `{cmd}`")
