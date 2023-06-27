@@ -1,7 +1,7 @@
-mouse_facial_expressions_2023
+Mouse Facial Expressions
 ==============================
+Andre Telfer (Abizaid Lab)
 
-A short description of the project.
 
 Project Organization
 ------------
