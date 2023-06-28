@@ -2,7 +2,7 @@ FROM nvidia/cuda:11.4.2-cudnn8-devel-ubuntu20.04
 
 RUN apt update 
 RUN apt install -y build-essential wget
-RUN apt install ffmpeg libsm6 libxext6  -y
+RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt install -y ffmpeg libsm6 libxext6 
 
 # Install miniconda to manage python 
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.3.1-0-Linux-x86_64.sh -O ~/miniconda.sh
