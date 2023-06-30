@@ -69,11 +69,17 @@ build-docker:
 
 ## Run Docker GPU
 run-docker-gpu: build-docker
-	docker run -it --gpus all --shm-size=8g --mount "type=bind,source=$(PROJECT_DIR)/,target=/workspace/" "$(PROJECT_NAME):latest"
+	docker run -it --gpus all --shm-size=8g \
+		--mount "type=bind,source=$(PROJECT_DIR)/,target=/workspace/" \
+		--mount "type=bind,source=/storage/,target=/storage/"
+		"$(PROJECT_NAME):latest"
 
 ## Run Docker CPU
 run-docker: build-docker
-	docker run -it  --shm-size=8g --mount "type=bind,source=$(PROJECT_DIR)/,target=/workspace/" "$(PROJECT_NAME):latest"
+	docker run -it --shm-size=8g \
+		--mount "type=bind,source=$(PROJECT_DIR)/,target=/workspace/" \
+		--mount "type=bind,source=/storage/,target=/storage/"
+		"$(PROJECT_NAME):latest"
 
 ## Upload Data to S3
 sync_data_to_s3:
