@@ -20,9 +20,11 @@ from dotenv import find_dotenv, load_dotenv
 project_dir = Path(__file__).resolve().parents[2]
 load_dotenv(find_dotenv())
 
+
 def variance_of_laplacian(image):
     """Used for blur detection"""
-    return cv2.Laplacian(image, cv2.CV_64F).var()
+    return cv2.Laplacian(np.array(image), cv2.CV_64F).var()
+
 
 def get_meta_csv():
     project_dir = Path(__file__).resolve().parents[2]
@@ -156,6 +158,7 @@ class FrameExtractor:
 
         self.cap = cv2.VideoCapture(self.video)
         self.df = pd.read_hdf(self.dlc_file)
+        self.pos = 0
 
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -177,7 +180,7 @@ class FrameExtractor:
 
     def compute_rotations_and_sides(self):
         self.left_angles = get_angle_between_bodyparts(self.df, "left_eye", "left_ear")
-        self.right_angles = get_angle_between_bodyparts(self.df, "right_eye", "right_ear")
+        self.right_angles = get_angle_between_bodyparts(self.df, "right_ear", "right_eye")
 
         # centre point to perform rotations and crop around
         self.right_side_centre = (
@@ -190,20 +193,35 @@ class FrameExtractor:
             .groupby(level="coords", axis=1)
             .mean()
         )
-
+        
+        # compute nose-to-distance
+        nose = self.df.xs('nose', level='bodyparts', axis=1).droplevel(0, axis=1)[['x', 'y']]
+        left_ear = self.df.xs('left_ear', level='bodyparts', axis=1).droplevel(0, axis=1)[['x', 'y']]
+        right_ear = self.df.xs('right_ear', level='bodyparts', axis=1).droplevel(0, axis=1)[['x', 'y']]
+        self.nose_to_left_ear_distance = pd.Series(np.linalg.norm(nose - left_ear, axis=1), index=nose.index)
+        self.nose_to_right_ear_distance = pd.Series(np.linalg.norm(nose - right_ear, axis=1), index=nose.index)
+        
     def __getitem__(self, idx):
         # Get frame
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        if idx != self.pos:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            
         ret, frame = self.cap.read()
+        self.pos += 1 
         image = Image.fromarray(frame)
 
         # Select which side is being faced
+        meta = {}
         if self.right_side_visible.loc[idx]:
             centre = self.right_side_centre
             angles = self.right_angles
+            meta['side'] = 'right'
+            meta['distance'] = self.nose_to_right_ear_distance.loc[idx]
         else:
             centre = self.left_side_centre
             angles = self.left_angles
+            meta['side'] = 'left'
+            meta['distance'] = self.nose_to_left_ear_distance.loc[idx]
 
         # Rotate around centre
         x, y = centre.loc[idx, ["x", "y"]]
@@ -213,22 +231,27 @@ class FrameExtractor:
         xmin, xmax = x - self.padding, x + self.padding
         ymin, ymax = y - self.padding, y + self.padding
         image = image.crop((xmin, ymin, xmax, ymax))
-        return image
+        
+        # Flip when mouse is facing right
+        if meta['side'] == 'right':
+            image = Image.fromarray(np.array(image)[:,::-1])
+            
+        return image, meta
 
     def __len__(self):
         return self.nframes
 
 
 @main.command()
-@click.option("--nframes", default=1000, type=int)
-@click.option("--sample_every", default=100, type=int)
+@click.option("--nframes", default=200, type=int)
+@click.option("--sample_every", default=10, type=int)
 @click.option("--skip_existing", default=True, type=bool)
 @click.option("--processed_videos_folder", default=get_processed_video_folder(), type=click.Path())
 @click.option(
     "--dlc_facial_labels_folder", default=get_dlc_facial_labels_folder(), type=click.Path()
 )
 @click.option(
-    "--extracted_frames_folder", default=get_dlc_facial_labels_folder(), type=click.Path()
+    "--extracted_frames_folder", default=get_extracted_frames_folder(), type=click.Path()
 )
 def extract_frames(
     nframes,
@@ -274,21 +297,31 @@ def extract_frames(
         is_side_portrait = frame_extractor.right_side_visible ^ frame_extractor.left_side_visible
         data = []
         for i in tqdm(np.arange(0,len(frame_extractor), sample_every), leave=False, desc="Frame"):
+            if not is_side_portrait.loc[i]:
+                continue
             
-            image = frame_extractor[i]
-            blur = variance_of_laplacian(image)
-            data.append(dict(blur=blur, frame=i))
+            image, meta = frame_extractor[i]
+            w, h = image.size
+            blur_focus = np.array(image)[h//4:h*3//4, w//2:w*3//2] # Focus on only a centre area in the middle of the face
+            blur = variance_of_laplacian(blur_focus)
+            intensity = blur_focus.mean()
+            
+            data.append(dict(blur=blur, frame=i, intensity=intensity, **meta))
         blur_df = pd.DataFrame(data)
+        blur_df.frame = blur_df.frame.astype(int)
 
         logger.info("Sorting by blur")
         blur_df = blur_df.sort_values('blur', ascending=False) # Sort so higher values are first
 
         logger.info("Saving top %i frames", nframes)
         blur_df = blur_df.head(nframes)
-        for idx, row in blur_df.iterrows():
-            filepath = video_extracted_frames_folder / f"frame{row.frame:05}.png"
+        for idx, row in tqdm(blur_df.iterrows(), total=len(blur_df), desc="Saving frames", leave=False):
+            filepath = video_extracted_frames_folder / f"frame{int(row.frame):05}.png"
+            image, meta = frame_extractor[row.frame]
             image.save(filepath)
 
+        blur_df.to_csv(video_extracted_frames_folder / 'blurs.csv')
+        
         logger.info("Extracting frames from video complete")
 
     logger.info("Extracting all frames complete")
