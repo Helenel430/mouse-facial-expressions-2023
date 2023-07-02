@@ -8,15 +8,21 @@ import subprocess
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
+from tqdm import tqdm
+from PIL import Image
 
 import click
 import cv2
 import pandas as pd
+import numpy as np
 from dotenv import find_dotenv, load_dotenv
 
 project_dir = Path(__file__).resolve().parents[2]
 load_dotenv(find_dotenv())
 
+def variance_of_laplacian(image):
+    """Used for blur detection"""
+    return cv2.Laplacian(image, cv2.CV_64F).var()
 
 def get_meta_csv():
     project_dir = Path(__file__).resolve().parents[2]
@@ -57,6 +63,15 @@ def get_dlc_facial_project_folder():
         return None
 
 
+def get_extracted_frames_folder():
+    try:
+        f = Path(os.environ["MFE_EXTRACTED_FRAMES_FOLDER"])
+        f = f / os.environ.get("MFE_VERSION")
+        return str(f)
+    except:
+        return None
+
+
 def to_seconds(time_str):
     d = datetime.strptime(time_str, "%M:%S")
     d = timedelta(minutes=d.minute, seconds=d.second)
@@ -75,6 +90,13 @@ def find_video_from_details(row, video_directory):
         return next(video_directory.glob(s)).parts[-1]
     except:
         return ""
+
+
+def get_angle_between_bodyparts(df, bp1, bp2):
+    bodyparts_df = df.droplevel(0, axis=1)
+    deltas = bodyparts_df.loc[:, bp2] - bodyparts_df.loc[:, bp1]
+    angles = np.arctan2(deltas.y, deltas.x)
+    return np.rad2deg(angles)
 
 
 def preprocess_video(row, input_directory, output_directory):
@@ -124,6 +146,152 @@ def preprocess_video(row, input_directory, output_directory):
 def main():
     pass
 
+
+class FrameExtractor:
+    def __init__(self, video, dlc_file, pcutoff=0.6, padding=150):
+        self.pcutoff = pcutoff
+        self.video = str(video)
+        self.dlc_file = str(dlc_file)
+        self.padding = padding
+
+        self.cap = cv2.VideoCapture(self.video)
+        self.df = pd.read_hdf(self.dlc_file)
+
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.nframes = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        assert self.nframes == self.df.shape[0]
+
+        # Only applies to rotation
+        self.fill = tuple(np.array([128, 128, 128], dtype=np.uint8))
+
+        # Compute
+        self.compute_rotations_and_sides()
+        self.compute_visibilities()
+
+    def compute_visibilities(self):
+        likelihood = self.df.xs("likelihood", axis=1, level="coords").droplevel(0, axis=1)
+        visibility = likelihood > self.pcutoff
+        self.left_side_visible = visibility.nose & visibility.left_eye & visibility.left_ear
+        self.right_side_visible = visibility.nose & visibility.right_eye & visibility.right_ear
+
+    def compute_rotations_and_sides(self):
+        self.left_angles = get_angle_between_bodyparts(self.df, "left_eye", "left_ear")
+        self.right_angles = get_angle_between_bodyparts(self.df, "right_eye", "right_ear")
+
+        # centre point to perform rotations and crop around
+        self.right_side_centre = (
+            self.df.loc[:, pd.IndexSlice[:, ["nose", "right_eye", "right_ear"]]]
+            .groupby(level="coords", axis=1)
+            .mean()
+        )
+        self.left_side_centre = (
+            self.df.loc[:, pd.IndexSlice[:, ["nose", "left_eye", "left_ear"]]]
+            .groupby(level="coords", axis=1)
+            .mean()
+        )
+
+    def __getitem__(self, idx):
+        # Get frame
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = self.cap.read()
+        image = Image.fromarray(frame)
+
+        # Select which side is being faced
+        if self.right_side_visible.loc[idx]:
+            centre = self.right_side_centre
+            angles = self.right_angles
+        else:
+            centre = self.left_side_centre
+            angles = self.left_angles
+
+        # Rotate around centre
+        x, y = centre.loc[idx, ["x", "y"]]
+        image = image.rotate(angles.loc[idx], center=(x, y), fillcolor=self.fill)
+
+        # Crop
+        xmin, xmax = x - self.padding, x + self.padding
+        ymin, ymax = y - self.padding, y + self.padding
+        image = image.crop((xmin, ymin, xmax, ymax))
+        return image
+
+    def __len__(self):
+        return self.nframes
+
+
+@main.command()
+@click.option("--nframes", default=1000, type=int)
+@click.option("--sample_every", default=100, type=int)
+@click.option("--skip_existing", default=True, type=bool)
+@click.option("--processed_videos_folder", default=get_processed_video_folder(), type=click.Path())
+@click.option(
+    "--dlc_facial_labels_folder", default=get_dlc_facial_labels_folder(), type=click.Path()
+)
+@click.option(
+    "--extracted_frames_folder", default=get_dlc_facial_labels_folder(), type=click.Path()
+)
+def extract_frames(
+    nframes,
+    sample_every,
+    skip_existing,
+    processed_videos_folder,
+    dlc_facial_labels_folder,
+    extracted_frames_folder,
+):
+    logger = logging.getLogger(__name__)
+    logger.info("Extracting frames from videos")
+
+    processed_videos_folder = Path(processed_videos_folder)
+    dlc_facial_labels_folder = Path(dlc_facial_labels_folder)
+    extracted_frames_folder = Path(extracted_frames_folder)
+
+    assert processed_videos_folder.exists()
+    assert dlc_facial_labels_folder.exists()
+    if not extracted_frames_folder.exists():
+        extracted_frames_folder.mkdir(parents=True)
+
+    logger.info("Matching videos and DLC files")
+    dlc_files = list(dlc_facial_labels_folder.glob("*.h5"))
+    data = []
+    for dlc_file in tqdm(dlc_files, leave=False):
+        fname, _ = dlc_file.parts[-1].split("DLC")
+        video = processed_videos_folder / f"{fname}.mp4"
+        data.append(dict(video=video, dlc_file=dlc_file, fname=fname))
+    files_df = pd.DataFrame(data)
+
+    for idx, row in files_df.iterrows():
+        logger.info("Processing video %s", row.video.parts[-1])
+
+        video_extracted_frames_folder = extracted_frames_folder / row.fname
+        if video_extracted_frames_folder.exists() and skip_existing:
+            logger.info("Video folder already exists, skipping")
+            continue
+        elif not video_extracted_frames_folder.exists():
+            video_extracted_frames_folder.mkdir(parents=True)
+
+        logger.info("Sampling portrait frames")
+        frame_extractor = FrameExtractor(row.video, row.dlc_file)
+        is_side_portrait = frame_extractor.right_side_visible ^ frame_extractor.left_side_visible
+        data = []
+        for i in tqdm(np.arange(0,len(frame_extractor), sample_every), leave=False, desc="Frame"):
+            
+            image = frame_extractor[i]
+            blur = variance_of_laplacian(image)
+            data.append(dict(blur=blur, frame=i))
+        blur_df = pd.DataFrame(data)
+
+        logger.info("Sorting by blur")
+        blur_df = blur_df.sort_values('blur', ascending=False) # Sort so higher values are first
+
+        logger.info("Saving top %i frames", nframes)
+        blur_df = blur_df.head(nframes)
+        for idx, row in blur_df.iterrows():
+            filepath = video_extracted_frames_folder / f"frame{row.frame:05}.png"
+            image.save(filepath)
+
+        logger.info("Extracting frames from video complete")
+
+    logger.info("Extracting all frames complete")
 
 @main.command()
 @click.option("--input_folder", default=get_processed_video_folder(), type=click.Path())
