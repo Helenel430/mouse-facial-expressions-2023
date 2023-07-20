@@ -60,6 +60,8 @@ process-raw-videos: requirements
 upload-data:
 	gsutil rsync -c -r $(PROJECT_DIR)/data/ gs://telfer_lps_facial_expressions/data
 
+
+## Download dataset
 download-data: 
 	gsutil rsync -c -r gs://telfer_lps_facial_expressions/data $(PROJECT_DIR)/data/ 
 
@@ -71,14 +73,14 @@ build-docker:
 run-docker-gpu: build-docker
 	docker run -it --gpus all --shm-size=8g \
 		--mount "type=bind,source=$(PROJECT_DIR)/,target=/workspace/" \
-		--mount "type=bind,source=/storage/,target=/storage/"
+		--mount "type=bind,source=/storage/,target=/storage/" \
 		"$(PROJECT_NAME):latest"
 
 ## Run Docker CPU
 run-docker: build-docker
 	docker run -it --shm-size=8g \
 		--mount "type=bind,source=$(PROJECT_DIR)/,target=/workspace/" \
-		--mount "type=bind,source=/storage/,target=/storage/"
+		--mount "type=bind,source=/storage/,target=/storage/" \
 		"$(PROJECT_NAME):latest"
 
 ## Upload Data to S3

@@ -24,6 +24,11 @@ mlflow
 # requires `conda install pytables`
 deeplabcut
 tensorflow
+torch
+torchvision 
+torchmetrics
+lightning
+optuna
 
 # For gsutil
 crcmod

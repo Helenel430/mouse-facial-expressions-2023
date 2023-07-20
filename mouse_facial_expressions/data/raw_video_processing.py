@@ -17,6 +17,8 @@ import pandas as pd
 import numpy as np
 from dotenv import find_dotenv, load_dotenv
 
+from mouse_facial_expressions.paths import *
+
 project_dir = Path(__file__).resolve().parents[2]
 load_dotenv(find_dotenv())
 
@@ -24,54 +26,6 @@ load_dotenv(find_dotenv())
 def variance_of_laplacian(image):
     """Used for blur detection"""
     return cv2.Laplacian(np.array(image), cv2.CV_64F).var()
-
-
-def get_meta_csv():
-    project_dir = Path(__file__).resolve().parents[2]
-    f = project_dir / f'data/raw/raw_videos_{os.environ.get("MFE_VERSION")}.csv'
-    return str(f)
-
-
-def get_raw_video_folder():
-    try:
-        f = Path(os.environ["MFE_RAW_VIDEO_FOLDER"])
-        return str(f)
-    except:
-        return None
-
-
-def get_processed_video_folder():
-    try:
-        f = Path(os.environ["MFE_PROCESSED_VIDEO_FOLDER"])
-        f = f / os.environ.get("MFE_VERSION")
-        return str(f)
-    except:
-        return None
-
-
-def get_dlc_facial_labels_folder():
-    try:
-        f = Path(os.environ["MFE_DLC_FACIAL_LABELS_FOLDER"])
-        f = f / os.environ.get("MFE_VERSION")
-        return str(f)
-    except:
-        return None
-
-
-def get_dlc_facial_project_folder():
-    try:
-        return os.environ["MFE_DLC_FACIAL_PROJECT_PATH"]
-    except:
-        return None
-
-
-def get_extracted_frames_folder():
-    try:
-        f = Path(os.environ["MFE_EXTRACTED_FRAMES_FOLDER"])
-        f = f / os.environ.get("MFE_VERSION")
-        return str(f)
-    except:
-        return None
 
 
 def to_seconds(time_str):
@@ -193,21 +147,29 @@ class FrameExtractor:
             .groupby(level="coords", axis=1)
             .mean()
         )
-        
+
         # compute nose-to-distance
-        nose = self.df.xs('nose', level='bodyparts', axis=1).droplevel(0, axis=1)[['x', 'y']]
-        left_ear = self.df.xs('left_ear', level='bodyparts', axis=1).droplevel(0, axis=1)[['x', 'y']]
-        right_ear = self.df.xs('right_ear', level='bodyparts', axis=1).droplevel(0, axis=1)[['x', 'y']]
-        self.nose_to_left_ear_distance = pd.Series(np.linalg.norm(nose - left_ear, axis=1), index=nose.index)
-        self.nose_to_right_ear_distance = pd.Series(np.linalg.norm(nose - right_ear, axis=1), index=nose.index)
-        
+        nose = self.df.xs("nose", level="bodyparts", axis=1).droplevel(0, axis=1)[["x", "y"]]
+        left_ear = self.df.xs("left_ear", level="bodyparts", axis=1).droplevel(0, axis=1)[
+            ["x", "y"]
+        ]
+        right_ear = self.df.xs("right_ear", level="bodyparts", axis=1).droplevel(0, axis=1)[
+            ["x", "y"]
+        ]
+        self.nose_to_left_ear_distance = pd.Series(
+            np.linalg.norm(nose - left_ear, axis=1), index=nose.index
+        )
+        self.nose_to_right_ear_distance = pd.Series(
+            np.linalg.norm(nose - right_ear, axis=1), index=nose.index
+        )
+
     def __getitem__(self, idx):
         # Get frame
         if idx != self.pos:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            
+
         ret, frame = self.cap.read()
-        self.pos += 1 
+        self.pos += 1
         image = Image.fromarray(frame)
 
         # Select which side is being faced
@@ -215,13 +177,13 @@ class FrameExtractor:
         if self.right_side_visible.loc[idx]:
             centre = self.right_side_centre
             angles = self.right_angles
-            meta['side'] = 'right'
-            meta['distance'] = self.nose_to_right_ear_distance.loc[idx]
+            meta["side"] = "right"
+            meta["distance"] = self.nose_to_right_ear_distance.loc[idx]
         else:
             centre = self.left_side_centre
             angles = self.left_angles
-            meta['side'] = 'left'
-            meta['distance'] = self.nose_to_left_ear_distance.loc[idx]
+            meta["side"] = "left"
+            meta["distance"] = self.nose_to_left_ear_distance.loc[idx]
 
         # Rotate around centre
         x, y = centre.loc[idx, ["x", "y"]]
@@ -231,16 +193,16 @@ class FrameExtractor:
         xmin, xmax = x - self.padding, x + self.padding
         ymin, ymax = y - self.padding, y + self.padding
         image = image.crop((xmin, ymin, xmax, ymax))
-        
+
         # Flip when mouse is facing right
-        if meta['side'] == 'right':
-            image = Image.fromarray(np.array(image)[:,::-1])
-            
+        if meta["side"] == "right":
+            image = Image.fromarray(np.array(image)[:, ::-1])
+
         return image, meta
 
     def __len__(self):
         return self.nframes
-
+    
 
 @main.command()
 @click.option("--nframes", default=200, type=int)
@@ -296,35 +258,44 @@ def extract_frames(
         frame_extractor = FrameExtractor(row.video, row.dlc_file)
         is_side_portrait = frame_extractor.right_side_visible ^ frame_extractor.left_side_visible
         data = []
-        for i in tqdm(np.arange(0,len(frame_extractor), sample_every), leave=False, desc="Frame"):
+        for i in tqdm(np.arange(0, len(frame_extractor), sample_every), leave=False, desc="Frame"):
             if not is_side_portrait.loc[i]:
                 continue
-            
+
             image, meta = frame_extractor[i]
             w, h = image.size
-            blur_focus = np.array(image)[h//4:h*3//4, w//2:w*3//2] # Focus on only a centre area in the middle of the face
+            blur_focus = np.array(image)[
+                h // 4 : h * 3 // 4, w // 2 : w * 3 // 2
+            ]  # Focus on only a centre area in the middle of the face
             blur = variance_of_laplacian(blur_focus)
             intensity = blur_focus.mean()
-            
+
             data.append(dict(blur=blur, frame=i, intensity=intensity, **meta))
+
+        if len(data) == 0:
+            logger.warning("No frames from the sideview were found! Video will not be included.")
+            continue
+
         blur_df = pd.DataFrame(data)
         blur_df.frame = blur_df.frame.astype(int)
 
         logger.info("Sorting by blur")
-        blur_df = blur_df.sort_values('blur', ascending=False) # Sort so higher values are first
+        blur_df = blur_df.sort_values("blur", ascending=False)  # Sort so higher values are first
 
         logger.info("Saving top %i frames", nframes)
         blur_df = blur_df.head(nframes)
-        for idx, row in tqdm(blur_df.iterrows(), total=len(blur_df), desc="Saving frames", leave=False):
-            filepath = video_extracted_frames_folder / f"frame{int(row.frame):05}.png"
-            image, meta = frame_extractor[row.frame]
+        for frame_idx, frame_row in tqdm(
+            blur_df.iterrows(), total=len(blur_df), desc="Saving frames", leave=False
+        ):
+            filepath = video_extracted_frames_folder / f"frame{int(frame_row.frame):05}.png"
+            image, meta = frame_extractor[frame_row.frame]
             image.save(filepath)
 
-        blur_df.to_csv(video_extracted_frames_folder / 'blurs.csv')
-        
+        blur_df.to_csv(video_extracted_frames_folder / "blurs.csv")
         logger.info("Extracting frames from video complete")
 
     logger.info("Extracting all frames complete")
+
 
 @main.command()
 @click.option("--input_folder", default=get_processed_video_folder(), type=click.Path())
@@ -412,7 +383,7 @@ def dlc_process_videos(splits, split_index, dlc_project, input_folder, output_fo
 @main.command()
 @click.option("--input_folder", default=get_raw_video_folder())
 @click.option("--output_folder", default=get_processed_video_folder())
-@click.option("--meta_csv", default=get_meta_csv())
+@click.option("--meta_csv", default=get_raw_video_csv())
 @click.option("-m", "--mouse", multiple=True, default=None, help="e.g. `m1.0, m2.2, f16.2`")
 def rename(input_folder, output_folder, meta_csv, mouse):
     """Runs data processing scripts to turn raw data from (../raw) into
@@ -428,7 +399,7 @@ def rename(input_folder, output_folder, meta_csv, mouse):
     meta_df = pd.read_csv(meta_csv)
 
     if output_folder is None:
-        output_folder = Path(os.environ["MFE_PROCESSED_VIDEOS"])
+        output_folder = get_processed_video_folder()
     else:
         output_folder = Path(output_folder)
         if not output_folder.exists():
