@@ -3,22 +3,71 @@ import json
 import logging
 import random
 from pathlib import Path
+import pandas as pd
 
 import click
 import mlflow
 import json
 import numpy as np
+import pickle 
 
 import torchmetrics
 import torch
 import torchvision
 import lightning.pytorch as pl 
+import re 
 
 from lightning.pytorch.callbacks import Callback
 from dotenv import find_dotenv, load_dotenv
 from torch.utils.data import DataLoader
-from mouse_facial_expressions.data.datasets import Task1Folds
+from mouse_facial_expressions.data.datasets import get_task_folder, Task1FoldDataset
 
+class Task3Folds:
+    def __init__(self, sex, version='3.0', train_augmentation='TrivialAugmentWide'):
+        if train_augmentation == 'TrivialAugmentWide':
+            self.train_transform = torchvision.transforms.Compose([
+                torchvision.transforms.ToPILImage(),
+                torchvision.transforms.TrivialAugmentWide(),
+                torchvision.transforms.ToTensor()
+            ])
+        elif train_augmentation is None or train_augmentation.lower() == 'none':
+            self.train_transform = torchvision.transforms.Compose([
+                torchvision.transforms.ToTensor()
+            ])
+        
+        self.test_transform = torchvision.transforms.Compose([
+            torchvision.transforms.ToTensor(),
+        ])
+
+        self.sex = sex
+        task1_path = get_task_folder(version)
+        self.df = pd.read_pickle(task1_path / 'dataset_df.pkl')
+
+        folds = (task1_path / sex).glob('fold*.pkl')
+        fold_df = pd.DataFrame({'foldpath': folds})
+        fold_df['fold_index'] = fold_df.foldpath.apply(lambda x: int(re.match('.*(\d+)', x.parts[-1]).group(1)))
+        fold_df = fold_df.sort_values('fold_index')
+        fold_df = fold_df.set_index('fold_index')
+        self.fold_df = fold_df
+        
+    def __len__(self):
+        return len(self.fold_df)
+    
+    def __getitem__(self, idx):
+        if idx >= len(self):
+            raise IndexError
+        
+        row = self.fold_df.loc[idx]
+        with open(row.foldpath, 'rb') as fp:
+            fold_data = pickle.load(fp)
+            
+        train = fold_data['train']
+        train_dataset = Task1FoldDataset(samples=train, df=self.df, transform=self.train_transform)
+        
+        test = fold_data['test']
+        test_dataset = Task1FoldDataset(samples=test, df=self.df, transform=self.test_transform)
+        return train_dataset, test_dataset
+    
     
 class DeepSet(pl.LightningModule):
     def __init__(self, config, class_weights):
@@ -136,7 +185,7 @@ class DeepSet(pl.LightningModule):
 @click.option("--weight_decay", type=click.FLOAT, default=1e-4)
 @click.option("--warmup_decay", type=click.FLOAT, default=0.0001)
 @click.option("--label_smoothing", type=click.FLOAT, default=0.1)
-@click.option("--dataset_version", type=click.STRING, default='1.0')
+@click.option("--dataset_version", type=click.STRING, default='3.0')
 @click.option("--train_augmentation", type=click.STRING, default='TrivialAugmentWide')
 @click.option("--seed", type=click.INT, default=97531, help="Seed random number generators.")
 def main(**kwargs):
@@ -156,60 +205,66 @@ def main(**kwargs):
         logger.info("Logging parameters\n" + json.dumps(kwargs, indent=4))
         mlflow.log_params(kwargs)
         
-        cv = Task1Folds(version=config['dataset_version'], train_augmentation=config['train_augmentation'])
-        for fold, (train_dataset, test_dataset) in enumerate(cv):
-            with mlflow.start_run(nested=True) as child_run:
-                logger.info("Starting training for fold %i with seed %i", fold, seed)
-                
-                logger.info("Logging parameters\n" + json.dumps(kwargs, indent=4))
-                mlflow.log_params(kwargs)
-                
-                random.seed(seed)
-                np.random.seed(seed)
-                # torch.use_deterministic_algorithms(True)
-                torch.manual_seed(seed)
-                g = torch.Generator()
-                g.manual_seed(seed)
-                
-                logger.info("Creating dataloader")
-                train_dataloader = DataLoader(train_dataset, batch_size=20, num_workers=8, shuffle=True, generator=g)
-                test_dataloader = DataLoader(test_dataset, batch_size=40, num_workers=8)
-                weights = train_dataset.get_class_weights()
-                weights = torch.from_numpy(weights).float()
-                model = DeepSet(config=config, class_weights=weights)
-                
-                loggers = []
-                callbacks = []
-                trainer = pl.Trainer(
-                    max_epochs=config['epochs'],
-                    callbacks=callbacks,
-                    logger=loggers,
-                    enable_checkpointing=False,
-                    accelerator='gpu', 
-                    devices=[0], 
-                )
-                trainer.fit(model, train_dataloader, test_dataloader)
-                
-                # Logging
-                mlflow.set_tag("fold", fold)
-                
-                mask_df = train_dataset.get_eval_mask()
-                mask_df.to_csv('testable_videos_mask.csv')
-                mlflow.log_artifact("testable_videos_mask.csv", "testable_videos_mask")
-                
-                meta_info = {
-                    'train_videos': list(train_dataset.data_in_samples.video.unique()),
-                    'test_videos': list(test_dataset.data_in_samples.video.unique())
-                }
-                with open('train_meta.json', 'w') as fp:
-                    json.dump(meta_info, fp, indent=4)
-                mlflow.log_artifact("train_meta.json", "meta_info")
-                
-                mlflow.pytorch.log_model(model, "model")
-                logger.info("run complete")
- 
+        for sex in ['male', 'female']:
+            logger.info("Processing sex %s", sex)
+            cv = Task3Folds(sex, version=config['dataset_version'], train_augmentation=config['train_augmentation'])
+            for fold, (train_dataset, test_dataset) in enumerate(cv):
+                logger.info("Train size %i", len(train_dataset))
+                logger.info("Test size %i", len(test_dataset))
 
-    logger.info("model run completed")
+                with mlflow.start_run(nested=True) as child_run:
+                    logger.info("Starting training for fold %i with seed %i", fold, seed)
+                    
+                    logger.info("Logging parameters\n" + json.dumps(kwargs, indent=4))
+                    mlflow.set_tag('sex', sex)
+                    mlflow.log_params(kwargs)
+                    
+                    random.seed(seed)
+                    np.random.seed(seed)
+                    # torch.use_deterministic_algorithms(True)
+                    torch.manual_seed(seed)
+                    g = torch.Generator()
+                    g.manual_seed(seed)
+                    
+                    logger.info("Creating dataloader")
+                    train_dataloader = DataLoader(train_dataset, batch_size=20, num_workers=8, shuffle=True, generator=g)
+                    test_dataloader = DataLoader(test_dataset, batch_size=40, num_workers=8)
+                    weights = train_dataset.get_class_weights()
+                    weights = torch.from_numpy(weights).float()
+                    model = DeepSet(config=config, class_weights=weights)
+                    
+                    loggers = []
+                    callbacks = []
+                    trainer = pl.Trainer(
+                        max_epochs=config['epochs'],
+                        callbacks=callbacks,
+                        logger=loggers,
+                        enable_checkpointing=False,
+                        accelerator='gpu', 
+                        devices=[0], 
+                    )
+                    trainer.fit(model, train_dataloader, test_dataloader)
+                    
+                    # Logging
+                    mlflow.set_tag("fold", fold)
+                    
+                    mask_df = train_dataset.get_eval_mask()
+                    mask_df.to_csv('testable_videos_mask.csv')
+                    mlflow.log_artifact("testable_videos_mask.csv", "testable_videos_mask")
+                    
+                    meta_info = {
+                        'train_videos': list(train_dataset.data_in_samples.video.unique()),
+                        'test_videos': list(test_dataset.data_in_samples.video.unique())
+                    }
+                    with open('train_meta.json', 'w') as fp:
+                        json.dump(meta_info, fp, indent=4)
+                    mlflow.log_artifact("train_meta.json", "meta_info")
+                    
+                    mlflow.pytorch.log_model(model, "model")
+                    logger.info("run complete")
+    
+
+        logger.info("model run completed")
 
 
 if __name__ == "__main__":

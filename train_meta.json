@@ -1,0 +1,31 @@
+{
+    "train_videos": [
+        "f9_rec1_preinjection",
+        "f1_rec1_preinjection",
+        "f15_rec1_preinjection",
+        "f14_rec1_preinjection",
+        "f15_rec4_4h-postinjection",
+        "f2_rec1_preinjection",
+        "f16_rec1_preinjection",
+        "f11_rec1_preinjection",
+        "f4_rec1_preinjection",
+        "f31_rec1_preinjection",
+        "f3_rec1_preinjection",
+        "f3_rec4_4h-postinjection",
+        "f7_rec1_preinjection",
+        "f10_rec1_preinjection",
+        "f31_rec4_4h-postinjection",
+        "f6_rec1_preinjection",
+        "f33_rec1_preinjection",
+        "f32_rec1_preinjection"
+    ],
+    "test_videos": [
+        "f8_rec1_preinjection",
+        "f30_rec1_preinjection",
+        "f5_rec1_preinjection",
+        "f12_rec1_preinjection",
+        "f12_rec4_4h-postinjection",
+        "f13_rec1_preinjection",
+        "f8_rec4_4h-postinjection"
+    ]
+}

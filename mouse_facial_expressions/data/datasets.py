@@ -7,7 +7,7 @@ import sklearn
 
 from torch.utils.data import Dataset
 from pathlib import Path
-from mouse_facial_expressions.paths import get_extracted_frames_folder, get_task1_folder
+from mouse_facial_expressions.paths import *
 from skimage.io import imread
 import torchvision
 from torchmetrics import Accuracy
@@ -71,18 +71,23 @@ class Task1FoldDataset(Dataset):
         return images, label
 
 class Task1Folds:
-    def __init__(self):
-        self.train_transform = torchvision.transforms.Compose([
-            torchvision.transforms.ToPILImage(),
-            torchvision.transforms.TrivialAugmentWide(),
-            torchvision.transforms.ToTensor()
-        ])
-
+    def __init__(self, version='1.0', train_augmentation='TrivialAugmentWide'):
+        if train_augmentation == 'TrivialAugmentWide':
+            self.train_transform = torchvision.transforms.Compose([
+                torchvision.transforms.ToPILImage(),
+                torchvision.transforms.TrivialAugmentWide(),
+                torchvision.transforms.ToTensor()
+            ])
+        elif train_augmentation is None or train_augmentation.lower() == 'none':
+            self.train_transform = torchvision.transforms.Compose([
+                torchvision.transforms.ToTensor()
+            ])
+        
         self.test_transform = torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
         ])
         
-        task1_path = get_task1_folder()
+        task1_path = get_task_folder(version)
         self.df = pd.read_pickle(task1_path / 'dataset_df.pkl')
 
         folds = task1_path.glob('fold*.pkl')
@@ -109,3 +114,5 @@ class Task1Folds:
         test = fold_data['test']
         test_dataset = Task1FoldDataset(samples=test, df=self.df, transform=self.test_transform)
         return train_dataset, test_dataset
+    
+

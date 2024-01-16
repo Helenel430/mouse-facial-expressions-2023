@@ -5,10 +5,28 @@ entry_points:
   train:
     parameters:
       seed: {type: int, default: 42}
-      epochs: {type: int, default: 3}
+      epochs: {type: int, default: 10}
+      dataset_version: {type: str, default: '1.0'}
+      train_augmentation: {type: str, default: 'TrivialAugmentWide'}
     command: "python mouse_facial_expressions/models/train_task1_baseline_model.py 
       --seed {seed}
-      --epochs {epochs}"
+      --epochs {epochs}
+      --dataset_version {dataset_version}
+      --train_augmentation {train_augmentation}"
+
+  trainv3:
+    parameters:
+      seed: {type: int, default: 42}
+      epochs: {type: int, default: 10}
+      dataset_version: {type: str, default: '3.0'}
+      train_augmentation: {type: str, default: 'TrivialAugmentWide'}
+      learning_rate: {type: float, default: 0.001}
+    command: "python mouse_facial_expressions/models/train_task3_baseline_model.py 
+      --seed {seed}
+      --epochs {epochs}
+      --dataset_version {dataset_version}
+      --train_augmentation {train_augmentation}
+      --learning_rate {learning_rate}"
 
   hparam_optimize:
     parameters:

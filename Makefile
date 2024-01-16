@@ -55,6 +55,19 @@ format:
 process-raw-videos: requirements
 	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/raw_video_processing.py rename
 
+## Make task datasets
+create-task-datasets: requirements
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task1 --version "1.1" --frameset_size 1
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task1 --version "1.2" --frameset_size 2
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task1 --version "1.3" --frameset_size 3
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task1 --version "1.4" --frameset_size 4
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task1 --version "1.5" --frameset_size 5
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task1 --version "1.6" --frameset_size 6
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task1 --version "1.7" --frameset_size 7
+
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task2
+
+	$(PYTHON_INTERPRETER) mouse_facial_expressions/data/make_datasets.py task3
 
 ## Upload dataset
 upload-data:

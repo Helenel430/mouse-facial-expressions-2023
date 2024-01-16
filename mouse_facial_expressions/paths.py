@@ -52,9 +52,9 @@ def get_extracted_frames_folder():
     except:
         return None
 
-def get_task1_folder():
+def get_task_folder(version):
     try:
-        f = Path(os.environ['MFE_TASKS']) / 'task1'
+        f = Path(os.environ['MFE_TASKS']) / f"task-{version}"
         return f
     except:
         return None
