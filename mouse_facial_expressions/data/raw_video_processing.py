@@ -16,6 +16,8 @@ import cv2
 import pandas as pd
 import numpy as np
 from dotenv import find_dotenv, load_dotenv
+import torch
+from transformers import SamModel, SamProcessor
 
 from mouse_facial_expressions.paths import *
 
@@ -98,17 +100,24 @@ def preprocess_video(row, input_directory, output_directory):
     return cmd
 
 
+def import_model():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = SamModel.from_pretrained("facebook/sam-vit-huge").to(device)
+    processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
+    return device, model, processor
+
 @click.group()
 def main():
     pass
 
 
 class FrameExtractor:
-    def __init__(self, video, dlc_file, pcutoff=0.6, padding=150):
+    def __init__(self, video, dlc_file, pcutoff=0.6, padding=180, image_size=(300,300)):
         self.pcutoff = pcutoff
         self.video = str(video)
         self.dlc_file = str(dlc_file)
         self.padding = padding
+        self.image_size = image_size
 
         self.cap = cv2.VideoCapture(self.video)
         self.df = pd.read_hdf(self.dlc_file)
@@ -170,23 +179,124 @@ class FrameExtractor:
 
         ret, frame = self.cap.read()
         self.pos += 1
-        image = Image.fromarray(frame)
-
+        
         # Select which side is being faced
         meta = {}
+        coords = []
+
         if self.right_side_visible.loc[idx]:
             centre = self.right_side_centre
             angles = self.right_angles
             meta["side"] = "right"
             meta["distance"] = self.nose_to_right_ear_distance.loc[idx]
+            # Get coordinates for nose, R_eye, R_ear
+            nose_x = self.df.loc[idx, pd.IndexSlice[:, "nose", "x"]].values[0]
+            coords.append(nose_x)
+            nose_y = self.df.loc[idx, pd.IndexSlice[:, "nose", "y"]].values[0]
+            coords.append(nose_y)
+            R_eye_x = self.df.loc[idx, pd.IndexSlice[:, "R_eye", "x"]].values[0]
+            coords.append(R_eye_x)
+            R_eye_y = self.df.loc[idx, pd.IndexSlice[:, "R_eye", "y"]].values[0]
+            coords.append(R_eye_y)
+            R_ear_x = self.df.loc[idx, pd.IndexSlice[:, "R_ear", "x"]].values[0]
+            coords.append(R_ear_x)
+            R_ear_y = self.df.loc[idx, pd.IndexSlice[:, "R_ear", "y"]].values[0]
+            coords.append(R_ear_y)
         else:
             centre = self.left_side_centre
             angles = self.left_angles
             meta["side"] = "left"
             meta["distance"] = self.nose_to_left_ear_distance.loc[idx]
+            # Get coordinates for nose, L_eye, L_ear 
+            nose_x = self.df.loc[idx, pd.IndexSlice[:, "nose", "x"]].values[0]
+            coords.append(nose_x)
+            nose_y = self.df.loc[idx, pd.IndexSlice[:, "nose", "y"]].values[0]
+            coords.append(nose_y)
+            L_eye_x = self.df.loc[idx, pd.IndexSlice[:, "L_eye", "x"]].values[0]
+            coords.append(L_eye_x)
+            L_eye_y = self.df.loc[idx, pd.IndexSlice[:, "L_eye", "y"]].values[0]
+            coords.append(L_eye_y)
+            L_ear_x = self.df.loc[idx, pd.IndexSlice[:, "L_ear", "x"]].values[0]
+            coords.append(L_ear_x)
+            L_ear_y = self.df.loc[idx, pd.IndexSlice[:, "L_ear", "y"]].values[0]
+            coords.append(L_ear_y)
+            
+        # Segmentation code here 
+        device, model, processor = import_model()
+        inputs = processor(frame, return_tensors="pt").to(device)
+        image_embeddings = model.get_image_embeddings(inputs["pixel_values"])
 
+        # Change coords to match format of SAM input_points
+        coord_pairs = [[coords[i:i +2] for i in range(0, len(coords), 2)]]
+        
+        # Making mask
+        input_points = coord_pairs
+        inputs = processor(frame, input_points=input_points, return_tensors="pt").to(device)
+        inputs.pop("pixel_values", None)
+        inputs.update({"image_embeddings": image_embeddings})
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        masks = processor.image_processor.post_process_masks(outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu())
+        scores = outputs.iou_scores
+
+        # Convert masks to binary matrix 
+        mask_np = masks[0].numpy().astype(np.uint8)
+        masks_tensor = masks[0].squeeze(0)
+
+        # Choose a mask based on # of pixels covered
+        min_pixels = 130000
+        max_pixels = 250000
+
+        mask_index = []
+            
+        # Find the pixels covered by mask
+        pixels_covered = [torch.sum(mask).item() for mask in masks_tensor]
+
+        for i, value in enumerate(pixels_covered):
+            print(value)
+            if (value > min_pixels) and (value < max_pixels):
+                mask_index.append(i)
+
+        # Checking number of masks that fit criteria
+        if len(mask_index) > 1:
+            # Pick the biggest mask out of mask_index 
+            max_value = pixels_covered[mask_index[0]]
+            max_index = mask_index[0]
+            for i in range(1, len(mask_index)):
+                index = mask_index[i]
+                if pixels_covered[index] > max_value:
+                    max_value = pixels_covered[index]
+                    max_index= index
+            mask_index = max_index 
+        elif len(mask_index) == 0:
+            # Pick mask closest to the threshold average (190000) out of all masks 
+            closest_value = abs(pixels_covered[0] - 190000)
+            closest_index = 0 
+            for i in range(1, len(pixels_covered)):
+                if abs(pixels_covered[i] - 190000) < closest_value:
+                    closest_value = abs(pixels_covered[i] - 190000)
+                    closest_index = i 
+            mask_index = closest_index 
+        else:
+            mask_index = mask_index[0]
+        
+        best_mask = masks_tensor[mask_index].numpy()
+        print(f"Picked mask at index {mask_index}.")
+
+        # Resize mask to match original image dimensions 
+        image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mask_resized = cv2.resize(best_mask.astype(np.uint8), (image_rgb.shape[1], image_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
+        binary_mask = (mask_resized > 0).astype(np.uint8)
+
+        # Replacing non-masked pixels with black 
+        segmented_frame = frame.copy()
+        segmented_frame[binary_mask == 0] = 0
+        
         # Rotate around centre
         x, y = centre.loc[idx, ["x", "y"]]
+        image = Image.fromarray(segmented_frame)
         image = image.rotate(angles.loc[idx], center=(x, y), fillcolor=self.fill)
 
         # Crop
@@ -264,9 +374,7 @@ def extract_frames(
 
             image, meta = frame_extractor[i]
             w, h = image.size
-            blur_focus = np.array(image)[
-                h // 4 : h * 3 // 4, w // 2 : w * 3 // 2
-            ]  # Focus on only a centre area in the middle of the face
+            blur_focus = np.array(image) #[h // 4 : h * 3 // 4, w // 2 : w * 3 // 2] Focus on only a centre area in the middle of the face
             blur = variance_of_laplacian(blur_focus)
             intensity = blur_focus.mean()
 
